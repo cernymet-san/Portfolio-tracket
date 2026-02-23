@@ -3,6 +3,7 @@ import os
 import tempfile
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 import yfinance as yf
 
@@ -31,10 +32,8 @@ def check_password():
                 st.error("Wrong password")
         st.stop()
 
-# Uncomment the line below to enable password protection:
 # check_password()
 
-# DEGIRO ISIN → ticker mapping
 ISIN_TO_TICKER = {
     "IE00BK5BQT80": "VWCE.DE",
     "IE00BKM4GZ66": "EMIM.AS",
@@ -42,27 +41,72 @@ ISIN_TO_TICKER = {
     "IE00BG0SKF03": "5MVL.DE",
 }
 
+# Symbol → emoji icon mapping
+SYMBOL_ICONS = {
+    "VWCE": "🌍", "VWCE.DE": "🌍",
+    "VWRP": "🌍", "VWRP.DE": "🌍",
+    "AVWS": "🌱", "AVWS.DE": "🌱",
+    "5MVL": "📊", "5MVL.DE": "📊",
+    "IS3S": "📈", "IS3S.DE": "📈",
+    "EMIM": "🌏", "EMIM.AS": "🌏",
+    "ZPRV": "🏦", "ZPRV.DE": "🏦",
+    "ZPRX": "🏦", "ZPRX.DE": "🏦",
+    "AAPL": "🍎", "MSFT": "💻", "GOOGL": "🔍",
+    "AMZN": "📦", "TSLA": "⚡", "NVDA": "🎮",
+    "BTC-EUR": "₿", "ETH-EUR": "⟠",
+}
+
+def get_icon(symbol: str) -> str:
+    symbol_up = symbol.upper()
+    if symbol_up in SYMBOL_ICONS:
+        return SYMBOL_ICONS[symbol_up]
+    base = symbol_up.split(".")[0]
+    if base in SYMBOL_ICONS:
+        return SYMBOL_ICONS[base]
+    return "📌"
+
 # -----------------------------
 # Custom CSS
 # -----------------------------
 st.markdown("""
 <style>
-.metric-green { color: #00c853 !important; font-size: 2rem; font-weight: 700; }
-.metric-red   { color: #ff1744 !important; font-size: 2rem; font-weight: 700; }
-.metric-neutral { font-size: 2rem; font-weight: 700; }
-.metric-label { color: #9e9e9e; font-size: 0.85rem; margin-bottom: 4px; }
+.metric-green { color: #00c853 !important; font-size: 2rem; font-weight: 700; margin: 0; }
+.metric-red   { color: #ff1744 !important; font-size: 2rem; font-weight: 700; margin: 0; }
+.metric-neutral { font-size: 2rem; font-weight: 700; margin: 0; }
+.metric-label { color: #9e9e9e; font-size: 0.85rem; margin-bottom: 4px; margin-top: 0; }
 .metric-box {
     background: #1e1e2e;
     border-radius: 12px;
     padding: 20px 24px;
     border: 1px solid #2e2e3e;
+    height: 100%;
 }
+
+/* Holding cards */
+.holding-card {
+    background: #1e1e2e;
+    border-radius: 12px;
+    padding: 16px 18px;
+    border: 1px solid #2e2e3e;
+    margin-bottom: 12px;
+    transition: border-color 0.2s;
+}
+.holding-card-green { border-left: 4px solid #00c853 !important; }
+.holding-card-red   { border-left: 4px solid #ff1744 !important; }
+.holding-card-neutral { border-left: 4px solid #444 !important; }
+.holding-icon { font-size: 2rem; margin-bottom: 4px; }
+.holding-symbol { font-size: 1.1rem; font-weight: 700; margin: 0; }
+.holding-shares { color: #9e9e9e; font-size: 0.8rem; margin: 0; }
+.holding-value { font-size: 1.15rem; font-weight: 700; margin: 4px 0 0 0; }
+.holding-gain-green { color: #00c853; font-size: 0.9rem; font-weight: 600; }
+.holding-gain-red   { color: #ff1744; font-size: 0.9rem; font-weight: 600; }
+.holding-alloc { color: #9e9e9e; font-size: 0.8rem; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # -----------------------------
-# Cached data fetchers
+# Cached fetchers
 # -----------------------------
 @st.cache_data(ttl=300)
 def fetch_last_close(ticker: str) -> float | None:
@@ -84,7 +128,6 @@ def fetch_history_value(tickers: list[str], shares: list[float], period: str) ->
                            auto_adjust=False, progress=False)
         if data is None or data.empty:
             return None
-
         series_list = []
         if len(tickers) == 1:
             close = data.get("Close")
@@ -96,10 +139,8 @@ def fetch_history_value(tickers: list[str], shares: list[float], period: str) ->
                 lvl0 = data.columns.get_level_values(0)
                 if t in lvl0 and "Close" in data[t].columns:
                     series_list.append(data[t]["Close"].ffill().fillna(0) * sh)
-
         if not series_list:
             return None
-
         return pd.concat(series_list, axis=1).ffill().fillna(0).sum(axis=1)
     except Exception:
         return None
@@ -119,7 +160,6 @@ def build_portfolio_table(p: Portfolio) -> pd.DataFrame:
             current_value = float(current_price) * float(s.shares)
             gain_loss = current_value - invested
             pct = (gain_loss / invested * 100) if invested else 0.0
-
         rows.append({
             "Symbol": s.symbol,
             "Shares": float(s.shares),
@@ -130,35 +170,25 @@ def build_portfolio_table(p: Portfolio) -> pd.DataFrame:
             "Gain (€)": gain_loss,
             "Gain (%)": pct,
         })
-
     if not rows:
         return pd.DataFrame(columns=[
             "Symbol", "Shares", "Buy Price (€)", "Current Price (€)",
             "Invested (€)", "Current Value (€)", "Gain (€)", "Gain (%)",
         ])
-
     return pd.DataFrame(rows).sort_values("Current Value (€)", ascending=False).reset_index(drop=True)
 
 
 def style_portfolio(df: pd.DataFrame):
     def color_gain(val):
-        if pd.isna(val):
-            return ""
-        if val > 0:
-            return "color: #00c853; font-weight: 600;"
-        if val < 0:
-            return "color: #ff1744; font-weight: 600;"
+        if pd.isna(val): return ""
+        if val > 0: return "color: #00c853; font-weight: 600;"
+        if val < 0: return "color: #ff1744; font-weight: 600;"
         return "color: #9e9e9e;"
-
     def bg_gain(val):
-        if pd.isna(val):
-            return ""
-        if val > 0:
-            return "background-color: rgba(0,200,83,0.08);"
-        if val < 0:
-            return "background-color: rgba(255,23,68,0.08);"
+        if pd.isna(val): return ""
+        if val > 0: return "background-color: rgba(0,200,83,0.08);"
+        if val < 0: return "background-color: rgba(255,23,68,0.08);"
         return ""
-
     fmt = {
         "Shares": "{:,.6f}",
         "Buy Price (€)": "€{:,.2f}",
@@ -168,7 +198,6 @@ def style_portfolio(df: pd.DataFrame):
         "Gain (€)": "€{:+,.2f}",
         "Gain (%)": "{:+,.2f}%",
     }
-
     return (
         df.style
         .format(fmt, na_rep="N/A")
@@ -290,7 +319,6 @@ with st.sidebar.expander("📥 Import Anycoin Crypto (.csv)", expanded=False):
             except Exception:
                 pass
 
-# Export
 st.sidebar.divider()
 if p.stocks:
     export_data = json.dumps({"stocks": [s.to_dict() for s in p.stocks]}, indent=4)
@@ -323,45 +351,95 @@ if not df.empty:
     pct_color  = "metric-green" if total_pct  >= 0 else "metric-red"
 
     m1, m2, m3, m4 = st.columns(4)
-
     with m1:
-        st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-        st.markdown('<p class="metric-label">Total Invested</p>', unsafe_allow_html=True)
-        st.markdown(f'<p class="metric-neutral">€{total_invested:,.2f}</p>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
+        st.markdown(f'<div class="metric-box"><p class="metric-label">Total Invested</p><p class="metric-neutral">€{total_invested:,.2f}</p></div>', unsafe_allow_html=True)
     with m2:
-        st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-        st.markdown('<p class="metric-label">Current Value</p>', unsafe_allow_html=True)
-        st.markdown(f'<p class="metric-neutral">€{total_value:,.2f}</p>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
+        st.markdown(f'<div class="metric-box"><p class="metric-label">Current Value</p><p class="metric-neutral">€{total_value:,.2f}</p></div>', unsafe_allow_html=True)
     with m3:
-        st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-        st.markdown('<p class="metric-label">Gain / Loss (€)</p>', unsafe_allow_html=True)
-        st.markdown(f'<p class="{gain_color}">€{total_gain:+,.2f}</p>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
+        st.markdown(f'<div class="metric-box"><p class="metric-label">Gain / Loss (€)</p><p class="{gain_color}">€{total_gain:+,.2f}</p></div>', unsafe_allow_html=True)
     with m4:
-        st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-        st.markdown('<p class="metric-label">Gain / Loss (%)</p>', unsafe_allow_html=True)
-        st.markdown(f'<p class="{pct_color}">{total_pct:+.2f}%</p>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-box"><p class="metric-label">Gain / Loss (%)</p><p class="{pct_color}">{total_pct:+.2f}%</p></div>', unsafe_allow_html=True)
 
-st.divider()
+    st.divider()
 
-# -----------------------------
-# Full-width chart
-# -----------------------------
-st.subheader("📊 Portfolio Value History")
+    # -----------------------------
+    # Donut chart + Holdings grid
+    # -----------------------------
+    chart_col, grid_col = st.columns([1, 2], gap="large")
 
-period_col, _ = st.columns([1, 5])
-with period_col:
-    period = st.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
+    with chart_col:
+        st.subheader("🥧 Allocation")
+        fig = px.pie(
+            df,
+            names="Symbol",
+            values="Current Value (€)",
+            hole=0.55,
+            color_discrete_sequence=px.colors.qualitative.Bold,
+        )
+        fig.update_traces(
+            textposition="outside",
+            textinfo="percent+label",
+            hovertemplate="<b>%{label}</b><br>€%{value:,.2f}<br>%{percent}<extra></extra>",
+        )
+        fig.update_layout(
+            showlegend=False,
+            margin=dict(t=20, b=20, l=20, r=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="white"),
+            height=380,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-if df.empty:
-    st.info("Portfolio is empty. Add a stock or import a file from the sidebar.")
-else:
+    with grid_col:
+        st.subheader("📦 Holdings")
+        cols_per_row = 3
+        rows = [df.iloc[i:i+cols_per_row] for i in range(0, len(df), cols_per_row)]
+        for row in rows:
+            cols = st.columns(cols_per_row)
+            for col, (_, holding) in zip(cols, row.iterrows()):
+                symbol = holding["Symbol"]
+                icon = get_icon(symbol)
+                value = holding["Current Value (€)"]
+                gain_eur = holding["Gain (€)"]
+                gain_pct = holding["Gain (%)"]
+                alloc = (value / total_value * 100) if total_value else 0
+
+                if gain_pct > 0:
+                    card_class = "holding-card holding-card-green"
+                    gain_class = "holding-gain-green"
+                    gain_arrow = "▲"
+                elif gain_pct < 0:
+                    card_class = "holding-card holding-card-red"
+                    gain_class = "holding-gain-red"
+                    gain_arrow = "▼"
+                else:
+                    card_class = "holding-card holding-card-neutral"
+                    gain_class = "holding-gain-green"
+                    gain_arrow = "—"
+
+                with col:
+                    st.markdown(f"""
+                    <div class="{card_class}">
+                        <div class="holding-icon">{icon}</div>
+                        <p class="holding-symbol">{symbol}</p>
+                        <p class="holding-shares">{holding['Shares']:,.4f} shares</p>
+                        <p class="holding-value">€{value:,.2f}</p>
+                        <span class="{gain_class}">{gain_arrow} {gain_pct:+.2f}% (€{gain_eur:+,.2f})</span><br>
+                        <span class="holding-alloc">{alloc:.1f}% of portfolio</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # -----------------------------
+    # Full-width chart
+    # -----------------------------
+    st.subheader("📊 Portfolio Value History")
+    period_col, _ = st.columns([1, 5])
+    with period_col:
+        period = st.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
+
     tickers = df["Symbol"].tolist()
     shares_list = df["Shares"].tolist()
     series = fetch_history_value(tickers, shares_list, period=period)
@@ -377,7 +455,10 @@ else:
     st.divider()
 
     # -----------------------------
-    # Holdings table
+    # Full table
     # -----------------------------
-    st.subheader("📋 Holdings")
-    st.dataframe(style_portfolio(df), use_container_width=True, height=500)git --version
+    st.subheader("📋 Full Holdings Table")
+    st.dataframe(style_portfolio(df), use_container_width=True, height=400)
+
+else:
+    st.info("Portfolio is empty. Add a stock or import a file from the sidebar.")
