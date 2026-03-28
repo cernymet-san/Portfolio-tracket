@@ -23,6 +23,7 @@ def check_password():
         if st.form_submit_button("Login", use_container_width=True):
             if pwd == st.secrets.get("password", ""):
                 st.session_state.authenticated = True
+                st.success("✅ Login successful!")
                 st.rerun()
             else:
                 st.error("❌ Wrong password. Try again.")
