@@ -110,6 +110,20 @@ st.markdown("""
 
 
 # ===== CACHED FETCHERS =====
+@st.cache_data(ttl=60)
+def search_tickers(query: str) -> list[tuple[str, str]]:
+    if not query or len(query) < 1:
+        return []
+    try:
+        results = yf.Search(query, max_results=8).quotes
+        return [
+            (r.get("symbol", ""), r.get("longname") or r.get("shortname", ""))
+            for r in results if r.get("symbol")
+        ]
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=300)
 def fetch_last_close(ticker: str) -> float | None:
     try:
@@ -214,7 +228,17 @@ p = init_session_state()
 st.sidebar.header("⚙️ Actions")
 
 with st.sidebar.expander("➕ Add stock", expanded=True):
-    sym = st.text_input("Symbol (e.g. VWCE.DE, BTC-EUR)", key="add_sym")
+    query = st.text_input("Search symbol or name", key="add_sym_query", placeholder="e.g. VWCE, Apple, Bitcoin...")
+    sym = ""
+    if query:
+        suggestions = search_tickers(query)
+        if suggestions:
+            options = [f"{s}  —  {n}" for s, n in suggestions]
+            chosen = st.selectbox("Select", options, key="add_sym_select")
+            sym = chosen.split("  —  ")[0].strip() if chosen else ""
+        else:
+            sym = query.strip().upper()
+            st.caption(f"No suggestions found — will use: **{sym}**")
     sh = st.number_input("Shares", min_value=0.0, value=0.0, step=0.01, format="%.6f", key="add_sh")
     buy = st.number_input("Buy price (€)", min_value=0.0, value=0.0, step=0.01, format="%.4f", key="add_buy")
     if st.button("Add / Update", use_container_width=True):
