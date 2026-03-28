@@ -10,29 +10,34 @@ import yfinance as yf
 from portfolio import Portfolio
 
 
-# -----------------------------
-# Page config
-# -----------------------------
+# ===== PAGE CONFIG =====
 st.set_page_config(page_title="Portfolio Tracker", layout="wide", page_icon="📈")
 
-# -----------------------------
-# Password protection
-# -----------------------------
+# ===== PASSWORD PROTECTION =====
 def check_password():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if not st.session_state.authenticated:
-        st.title("🔒 Login")
-        pwd = st.text_input("Password", type="password")
-        if st.button("Login"):
-            if "password" in st.secrets and pwd == st.secrets["password"]:
+    if st.session_state.get("authenticated"):
+        return
+    st.title("🔒 Login to Your Portfolio")
+    with st.form("login_form"):
+        pwd = st.text_input("Password:", type="password")
+        if st.form_submit_button("Login", use_container_width=True):
+            if pwd == st.secrets.get("password", ""):
                 st.session_state.authenticated = True
                 st.rerun()
             else:
-                st.error("Wrong password")
-        st.stop()
+                st.error("❌ Wrong password. Try again.")
+    st.stop()
 
-# check_password()
+check_password()
+
+
+# ===== PERSISTENT SESSION STATE =====
+def init_session_state():
+    """Initialize portfolio in session state to persist during the session."""
+    if "portfolio" not in st.session_state:
+        st.session_state.portfolio = Portfolio()
+    return st.session_state.portfolio
+
 
 ISIN_TO_TICKER = {
     "IE00BK5BQT80": "VWCE.DE",
@@ -65,9 +70,7 @@ def get_icon(symbol: str) -> str:
         return SYMBOL_ICONS[base]
     return "📌"
 
-# -----------------------------
-# Custom CSS
-# -----------------------------
+# ===== CUSTOM CSS =====
 st.markdown("""
 <style>
 .metric-green { color: #00c853 !important; font-size: 2rem; font-weight: 700; margin: 0; }
@@ -105,9 +108,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# -----------------------------
-# Cached fetchers
-# -----------------------------
+# ===== CACHED FETCHERS =====
 @st.cache_data(ttl=300)
 def fetch_last_close(ticker: str) -> float | None:
     try:
@@ -146,9 +147,7 @@ def fetch_history_value(tickers: list[str], shares: list[float], period: str) ->
         return None
 
 
-# -----------------------------
-# Portfolio table builder
-# -----------------------------
+# ===== PORTFOLIO TABLE BUILDER =====
 def build_portfolio_table(p: Portfolio) -> pd.DataFrame:
     rows = []
     for s in p.stocks:
@@ -206,15 +205,11 @@ def style_portfolio(df: pd.DataFrame):
     )
 
 
-# -----------------------------
-# Load portfolio
-# -----------------------------
-p = Portfolio()
+# ===== LOAD PORTFOLIO WITH SESSION STATE =====
+p = init_session_state()
 
 
-# -----------------------------
-# Sidebar
-# -----------------------------
+# ===== SIDEBAR =====
 st.sidebar.header("⚙️ Actions")
 
 with st.sidebar.expander("➕ Add stock", expanded=True):
@@ -225,10 +220,10 @@ with st.sidebar.expander("➕ Add stock", expanded=True):
         if sym.strip() and sh > 0:
             p.add_stock(sym.strip(), float(sh), float(buy))
             fetch_last_close.clear()
-            st.success(f"Added/updated {sym.strip()}")
+            st.success(f"✅ Added/updated {sym.strip()}")
             st.rerun()
         else:
-            st.error("Enter a valid symbol and shares > 0")
+            st.error("❌ Enter a valid symbol and shares > 0")
 
 with st.sidebar.expander("➖ Remove stock", expanded=False):
     remove_sym = st.text_input("Symbol to remove", key="rm_sym")
@@ -236,10 +231,10 @@ with st.sidebar.expander("➖ Remove stock", expanded=False):
         if remove_sym.strip():
             p.remove_stock(remove_sym.strip())
             fetch_last_close.clear()
-            st.success(f"Removed {remove_sym.strip()}")
+            st.success(f"✅ Removed {remove_sym.strip()}")
             st.rerun()
         else:
-            st.error("Enter a symbol to remove")
+            st.error("❌ Enter a symbol to remove")
 
 with st.sidebar.expander("📥 Import Portfolio (.json)", expanded=False):
     json_file = st.file_uploader("Upload portfolio.json", type=["json"], key="json_upload")
@@ -249,7 +244,7 @@ with st.sidebar.expander("📥 Import Portfolio (.json)", expanded=False):
             data = json.load(json_file)
             stocks = data.get("stocks", [])
             if not stocks:
-                st.error("No stocks found in JSON file.")
+                st.error("❌ No stocks found in JSON file.")
             else:
                 if overwrite_json:
                     p.stocks = []
@@ -258,10 +253,10 @@ with st.sidebar.expander("📥 Import Portfolio (.json)", expanded=False):
                 p.save_portfolio()
                 fetch_last_close.clear()
                 fetch_history_value.clear()
-                st.success(f"Imported {len(stocks)} stocks from JSON")
+                st.success(f"✅ Imported {len(stocks)} stocks from JSON")
                 st.rerun()
         except Exception as e:
-            st.error(f"Failed to import JSON: {e}")
+            st.error(f"❌ Failed to import JSON: {e}")
 
 with st.sidebar.expander("📥 Import XTB Positions (.xlsx)", expanded=False):
     xtb_file = st.file_uploader("Upload XTB XLSX", type=["xlsx"], key="xtb_upload")
@@ -273,7 +268,7 @@ with st.sidebar.expander("📥 Import XTB Positions (.xlsx)", expanded=False):
             p.import_xtb_positions_xlsx(tmp_path)
             fetch_last_close.clear()
             fetch_history_value.clear()
-            st.success("Imported XTB XLSX into portfolio")
+            st.success("✅ Imported XTB XLSX into portfolio")
             st.rerun()
         finally:
             try:
@@ -292,7 +287,7 @@ with st.sidebar.expander("📥 Import DEGIRO Transactions (.csv)", expanded=Fals
             p.import_degiro_transactions_csv(tmp_path, ISIN_TO_TICKER, overwrite=False)
             fetch_last_close.clear()
             fetch_history_value.clear()
-            st.success("Imported DEGIRO CSV into portfolio")
+            st.success("✅ Imported DEGIRO CSV into portfolio")
             st.rerun()
         finally:
             try:
@@ -311,7 +306,7 @@ with st.sidebar.expander("📥 Import Anycoin Crypto (.csv)", expanded=False):
             p.import_anycoin_trade_fills_csv(tmp_path, overwrite=False, czk_per_eur=czk_rate)
             fetch_last_close.clear()
             fetch_history_value.clear()
-            st.success("Imported Anycoin crypto positions")
+            st.success("✅ Imported Anycoin crypto positions")
             st.rerun()
         finally:
             try:
@@ -330,6 +325,11 @@ if p.stocks:
         use_container_width=True,
     )
 
+st.sidebar.divider()
+if st.sidebar.button("🚪 Logout", use_container_width=True):
+    st.session_state.authenticated = False
+    st.rerun()
+
 
 # ==============================
 # MAIN LAYOUT
@@ -338,9 +338,7 @@ st.title("📈 Portfolio Tracker")
 
 df = build_portfolio_table(p)
 
-# -----------------------------
-# Summary metric cards
-# -----------------------------
+# ===== SUMMARY METRIC CARDS =====
 if not df.empty:
     total_invested = float(df["Invested (€)"].sum())
     total_value = float(df["Current Value (€)"].sum())
@@ -362,9 +360,7 @@ if not df.empty:
 
     st.divider()
 
-    # -----------------------------
-    # Donut chart + Holdings grid
-    # -----------------------------
+    # ===== DONUT CHART + HOLDINGS GRID =====
     chart_col, grid_col = st.columns([1, 2], gap="large")
 
     with chart_col:
@@ -432,9 +428,7 @@ if not df.empty:
 
     st.divider()
 
-    # -----------------------------
-    # Full-width chart
-    # -----------------------------
+    # ===== PORTFOLIO VALUE HISTORY =====
     st.subheader("📊 Portfolio Value History")
     period_col, _ = st.columns([1, 5])
     with period_col:
@@ -444,7 +438,7 @@ if not df.empty:
     shares_list = df["Shares"].tolist()
     series = fetch_history_value(tickers, shares_list, period=period)
     if series is None or series.empty:
-        st.warning("No history data available for chart.")
+        st.warning("⚠️ No history data available for chart.")
     else:
         st.line_chart(
             pd.DataFrame({"Portfolio Value (€)": series}),
@@ -454,11 +448,10 @@ if not df.empty:
 
     st.divider()
 
-    # -----------------------------
-    # Full table
-    # -----------------------------
+    # ===== FULL TABLE =====
     st.subheader("📋 Full Holdings Table")
     st.dataframe(style_portfolio(df), use_container_width=True, height=400)
 
 else:
-    st.info("Portfolio is empty. Add a stock or import a file from the sidebar.")
+    st.info("📭 Portfolio is empty. Add a stock or import a file from the sidebar.")
+    
