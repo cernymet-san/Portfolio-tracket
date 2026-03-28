@@ -5,10 +5,11 @@ import pandas as pd
 class Stock:
     """Handles individual stock data and operations"""
 
-    def __init__(self, symbol, shares, purchase_price):
+    def __init__(self, symbol, shares, purchase_price, purchase_date=None):
         self.symbol = symbol.upper()
         self.shares = shares
         self.purchase_price = purchase_price  # assumed EUR
+        self.purchase_date = purchase_date  # ISO string "YYYY-MM-DD" or None
 
     def get_current_price(self):
         """Fetch current stock price (native currency, assumed EUR for EU tickers)"""
@@ -53,8 +54,11 @@ class Stock:
         return 0, 0
 
     def to_dict(self):
-        return {
+        d = {
             "symbol": self.symbol,
             "shares": self.shares,
             "purchase_price": self.purchase_price,
         }
+        if self.purchase_date:
+            d["purchase_date"] = self.purchase_date
+        return d

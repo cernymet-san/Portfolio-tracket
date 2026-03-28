@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+from datetime import date
 
 import pandas as pd
 import plotly.express as px
@@ -243,12 +244,13 @@ def fetch_last_close(ticker: str) -> float | None:
 
 
 @st.cache_data(ttl=3600)
-def fetch_history_value(tickers: list[str], shares: list[float], period: str) -> pd.Series | None:
+def fetch_history_value(tickers: list[str], shares: list[float], period: str = "1y", start: str | None = None) -> pd.Series | None:
     if not tickers:
         return None
     try:
-        data = yf.download(tickers, period=period, interval="1d", group_by="ticker",
-                           auto_adjust=False, progress=False)
+        kwargs = {"start": start} if start else {"period": period}
+        data = yf.download(tickers, interval="1d", group_by="ticker",
+                           auto_adjust=False, progress=False, **kwargs)
         if data is None or data.empty:
             return None
         series_list = []
@@ -290,11 +292,12 @@ def build_portfolio_table(p: Portfolio) -> pd.DataFrame:
             "Current Value (€)": current_value,
             "Gain (€)": gain_loss,
             "Gain (%)": pct,
+            "Purchased": s.purchase_date or "",
         })
     if not rows:
         return pd.DataFrame(columns=[
             "Symbol", "Shares", "Buy Price (€)", "Current Price (€)",
-            "Invested (€)", "Current Value (€)", "Gain (€)", "Gain (%)",
+            "Invested (€)", "Current Value (€)", "Gain (€)", "Gain (%)", "Purchased",
         ])
     return pd.DataFrame(rows).sort_values("Current Value (€)", ascending=False).reset_index(drop=True)
 
@@ -319,6 +322,8 @@ def render_holdings_table(df: pd.DataFrame, total_value: float) -> str:
 
         gain_cls = "gp" if gain_eur >= 0 else "gn"
         arrow = "↗" if gain_eur >= 0 else "↘"
+        purchased = row.get("Purchased", "") or ""
+        purchased_str = purchased if purchased else '<span style="color:#ccc">—</span>'
 
         rows_html += f"""
         <tr>
@@ -349,6 +354,7 @@ def render_holdings_table(df: pd.DataFrame, total_value: float) -> str:
               <span style="font-size:0.82rem">{alloc:.1f}%</span>
             </div>
           </td>
+          <td style="color:#6b7280;font-size:0.82rem">{purchased_str}</td>
         </tr>"""
 
     return f"""
@@ -358,7 +364,7 @@ def render_holdings_table(df: pd.DataFrame, total_value: float) -> str:
         <thead>
           <tr>
             <th>ASSET</th><th>PRICE</th><th>QUANTITY</th>
-            <th>VALUE</th><th>GAIN/LOSS</th><th>ALLOCATION</th>
+            <th>VALUE</th><th>GAIN/LOSS</th><th>ALLOCATION</th><th>PURCHASED</th>
           </tr>
         </thead>
         <tbody>{rows_html}</tbody>
@@ -458,10 +464,20 @@ if page == "🗂  Portfolio":
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
         period_col, _ = st.columns([1, 5])
         with period_col:
-            period = st.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
+            period = st.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "Since first purchase"], index=3)
         tickers = df["Symbol"].tolist()
         shares_list = df["Shares"].tolist()
-        series = fetch_history_value(tickers, shares_list, period=period)
+
+        start_date = None
+        if period == "Since first purchase":
+            dates = [row for row in df["Purchased"] if row]
+            if dates:
+                start_date = min(dates)
+            else:
+                st.caption("No purchase dates recorded — showing 1y instead.")
+                period = "1y"
+
+        series = fetch_history_value(tickers, shares_list, period=period, start=start_date)
         if series is None or series.empty:
             st.warning("⚠️ No history data available.")
         else:
@@ -491,9 +507,10 @@ elif page == "➕  Add Asset":
                 st.caption(f"No suggestions — will use: **{sym}**")
         sh = st.number_input("Shares", min_value=0.0, value=0.0, step=0.01, format="%.6f", key="add_sh")
         buy = st.number_input("Buy price (€)", min_value=0.0, value=0.0, step=0.01, format="%.4f", key="add_buy")
+        purchase_dt = st.date_input("Purchase date", value=date.today(), key="add_date")
         if st.button("Add / Update", use_container_width=True, type="primary"):
             if sym.strip() and sh > 0:
-                p.add_stock(sym.strip(), float(sh), float(buy))
+                p.add_stock(sym.strip(), float(sh), float(buy), purchase_date=str(purchase_dt))
                 fetch_last_close.clear()
                 st.success(f"✅ Added/updated {sym.strip()}")
                 st.rerun()

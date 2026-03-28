@@ -18,15 +18,17 @@ class Portfolio:
     # Core CRUD
     # ------------------------------------------------------------------
 
-    def add_stock(self, symbol, shares, purchase_price):
+    def add_stock(self, symbol, shares, purchase_price, purchase_date=None):
         symbol = symbol.upper().strip()
         for existing in self.stocks:
             if existing.symbol == symbol:
                 print(f"⚠️  {symbol} already exists. Adding shares.")
                 existing.shares += shares
+                if purchase_date and not existing.purchase_date:
+                    existing.purchase_date = purchase_date
                 self.save_portfolio()
                 return
-        self.stocks.append(Stock(symbol, shares, purchase_price))
+        self.stocks.append(Stock(symbol, shares, purchase_price, purchase_date))
         self.save_portfolio()
         print(f"✅ Added {shares} shares of {symbol} at €{purchase_price}")
 
