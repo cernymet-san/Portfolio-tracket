@@ -295,18 +295,41 @@ class Portfolio:
         try:
             df = pd.read_excel(xlsx_path, sheet_name=sheet_name)
 
-            required = {"Symbol", "Type", "Volume", "Open price"}
-            missing = required - set(df.columns)
+            # Normalize column names: strip whitespace, lowercase for matching
+            df.columns = df.columns.str.strip()
+            col_map = {c.lower(): c for c in df.columns}
+            print(f"  ℹ️ XTB Positions columns: {list(df.columns)}")
+
+            # Flexible column name matching
+            def find_col(*candidates):
+                for c in candidates:
+                    if c in col_map:
+                        return col_map[c]
+                return None
+
+            sym_col   = find_col("symbol")
+            type_col  = find_col("type", "direction")
+            vol_col   = find_col("volume", "quantity", "shares")
+            price_col = find_col("open price", "openprice", "open_price", "price")
+
+            missing = [n for n, c in [("Symbol", sym_col), ("Type", type_col), ("Volume", vol_col), ("Open price", price_col)] if c is None]
             if missing:
-                print(f"❌ XLSX missing columns: {missing}")
-                print(f"Found columns: {list(df.columns)}")
+                print(f"❌ Could not find columns: {missing}")
+                print(f"   Available: {list(df.columns)}")
                 return
+
+            # Rename to standard names
+            df = df.rename(columns={sym_col: "Symbol", type_col: "Type", vol_col: "Volume", price_col: "Open price"})
 
             df["Symbol"] = df["Symbol"].astype(str).str.strip()
             df = df[df["Symbol"].str.lower() != "total"]
-            df = df[df["Symbol"] != ""]
+            df = df[df["Symbol"].str.strip() != ""]
             df["Type"] = df["Type"].astype(str).str.upper().str.strip()
-            df = df[df["Type"] == "BUY"]
+
+            print(f"  ℹ️ Unique Type values: {df['Type'].unique().tolist()}")
+
+            # Accept BUY, LONG, or any positive direction
+            df = df[df["Type"].isin(["BUY", "LONG", "B", "PURCHASE"])]
 
             def to_float(series):
                 return pd.to_numeric(
@@ -320,6 +343,11 @@ class Portfolio:
             df["Volume"] = to_float(df["Volume"])
             df["Open price"] = to_float(df["Open price"])
             df = df.dropna(subset=["Volume", "Open price"])
+            print(f"  ℹ️ Rows after filtering: {len(df)}")
+
+            if len(df) == 0:
+                print("❌ No valid rows found after filtering. Check Type values and column names above.")
+                return
 
             if overwrite:
                 self.stocks = []
