@@ -21,7 +21,7 @@ def check_password():
     st.title("🔒 Login to Your Portfolio")
     with st.form("login_form"):
         pwd = st.text_input("Password:", type="password")
-        if st.form_submit_button("Login", use_container_width=True):
+        if st.form_submit_button("Login", width="stretch"):
             if pwd == st.secrets.get("password", ""):
                 st.session_state.authenticated = True
                 st.success("✅ Login successful!")
@@ -394,7 +394,7 @@ with st.sidebar:
 
     st.markdown("<div style='height:40px'></div>", unsafe_allow_html=True)
     st.divider()
-    if st.button("🚪 Logout", use_container_width=True):
+    if st.button("🚪 Logout", width="stretch"):
         st.session_state.authenticated = False
         st.rerun()
 
@@ -443,7 +443,7 @@ if page == "🗂  Portfolio":
             fig1.update_traces(textposition="outside", textinfo="percent+label",
                                hovertemplate="<b>%{label}</b><br>€%{value:,.2f}<br>%{percent}<extra></extra>")
             fig1.update_layout(**chart_layout)
-            st.plotly_chart(fig1, use_container_width=True)
+            st.plotly_chart(fig1, width="stretch")
 
         with c2:
             df["Type"] = df["Symbol"].apply(get_asset_type)
@@ -455,7 +455,7 @@ if page == "🗂  Portfolio":
             fig2.update_traces(textposition="outside", textinfo="percent+label",
                                hovertemplate="<b>%{label}</b><br>€%{value:,.2f}<br>%{percent}<extra></extra>")
             fig2.update_layout(**chart_layout)
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width="stretch")
 
         # Holdings table
         st.markdown(render_holdings_table(df, total_value), unsafe_allow_html=True)
@@ -482,7 +482,7 @@ if page == "🗂  Portfolio":
             st.warning("⚠️ No history data available.")
         else:
             st.line_chart(pd.DataFrame({"Portfolio Value (€)": series}),
-                          use_container_width=True, height=320)
+                          width="stretch", height=320)
     else:
         st.info("📭 Portfolio is empty. Go to **Add Asset** to get started.")
 
@@ -508,7 +508,7 @@ elif page == "➕  Add Asset":
         sh = st.number_input("Shares", min_value=0.0, value=0.0, step=0.01, format="%.6f", key="add_sh")
         buy = st.number_input("Buy price (€)", min_value=0.0, value=0.0, step=0.01, format="%.4f", key="add_buy")
         purchase_dt = st.date_input("Purchase date", value=date.today(), key="add_date")
-        if st.button("Add / Update", use_container_width=True, type="primary"):
+        if st.button("Add / Update", width="stretch", type="primary"):
             if sym.strip() and sh > 0:
                 p.add_stock(sym.strip(), float(sh), float(buy), purchase_date=str(purchase_dt))
                 fetch_last_close.clear()
@@ -520,7 +520,7 @@ elif page == "➕  Add Asset":
     with col2:
         st.subheader("Remove")
         remove_sym = st.text_input("Symbol to remove", key="rm_sym")
-        if st.button("Remove", use_container_width=True):
+        if st.button("Remove", width="stretch"):
             if remove_sym.strip():
                 p.remove_stock(remove_sym.strip())
                 fetch_last_close.clear()
@@ -539,7 +539,7 @@ elif page == "📥  Import / Export":
         with st.expander("📥 Import Portfolio (.json)", expanded=True):
             json_file = st.file_uploader("Upload portfolio.json", type=["json"], key="json_upload")
             overwrite_json = st.checkbox("Overwrite existing portfolio", value=False, key="json_overwrite")
-            if json_file and st.button("Import JSON", use_container_width=True):
+            if json_file and st.button("Import JSON", width="stretch"):
                 try:
                     data = json.load(json_file)
                     stocks = data.get("stocks", [])
@@ -560,7 +560,7 @@ elif page == "📥  Import / Export":
 
         with st.expander("📥 Import XTB Positions (.xlsx)"):
             xtb_file = st.file_uploader("Upload XTB XLSX", type=["xlsx"], key="xtb_upload")
-            if xtb_file and st.button("Import XTB XLSX", use_container_width=True):
+            if xtb_file and st.button("Import XTB XLSX", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
                     tmp.write(xtb_file.getbuffer())
                     tmp_path = tmp.name
@@ -579,7 +579,7 @@ elif page == "📥  Import / Export":
         with st.expander("📥 Import DEGIRO Transactions (.csv)"):
             degiro_file = st.file_uploader("Upload DEGIRO CSV", type=["csv"], key="degiro_upload")
             st.caption("Requires ISIN_TO_TICKER mapping in app.py.")
-            if degiro_file and st.button("Import DEGIRO CSV", use_container_width=True):
+            if degiro_file and st.button("Import DEGIRO CSV", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
                     tmp.write(degiro_file.getbuffer())
                     tmp_path = tmp.name
@@ -598,7 +598,7 @@ elif page == "📥  Import / Export":
         with st.expander("📥 Import Anycoin Crypto (.csv)"):
             anycoin_file = st.file_uploader("Upload Anycoin CSV", type=["csv"], key="anycoin_upload")
             czk_rate = st.number_input("CZK per EUR", min_value=1.0, value=25.0, step=0.5, key="czk_rate")
-            if anycoin_file and st.button("Import Anycoin CSV", use_container_width=True):
+            if anycoin_file and st.button("Import Anycoin CSV", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
                     tmp.write(anycoin_file.getbuffer())
                     tmp_path = tmp.name
@@ -623,7 +623,7 @@ elif page == "📥  Import / Export":
                 data=export_data,
                 file_name="portfolio.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("No stocks to export.")
@@ -650,7 +650,7 @@ elif page == "📊  Analytics":
             st.warning("⚠️ No history data available.")
         else:
             st.line_chart(pd.DataFrame({"Portfolio Value (€)": series}),
-                          use_container_width=True, height=350)
+                          width="stretch", height=350)
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -677,4 +677,4 @@ elif page == "📊  Analytics":
             .format(fmt, na_rep="N/A")
             .applymap(color_gain, subset=["Gain (€)", "Gain (%)"])
         )
-        st.dataframe(styled, use_container_width=True, height=400)
+        st.dataframe(styled, width="stretch", height=400)
