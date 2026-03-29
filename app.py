@@ -292,7 +292,7 @@ def build_portfolio_table(p: Portfolio) -> pd.DataFrame:
             "Current Value (€)": current_value,
             "Gain (€)": gain_loss,
             "Gain (%)": pct,
-            "Purchased": s.purchase_date or "",
+            "Purchased": getattr(s, "purchase_date", None) or "",
         })
     if not rows:
         return pd.DataFrame(columns=[
