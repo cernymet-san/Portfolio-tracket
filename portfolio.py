@@ -279,19 +279,15 @@ class Portfolio:
             if overwrite:
                 self.stocks = []
 
-            grouped = (
-                df.groupby("Symbol", as_index=False)
-                .apply(
-                    lambda g: pd.Series({
-                        "shares": g["Volume"].sum(),
-                        "avg_buy": (
-                            (g["Volume"] * g["Open price"]).sum() / g["Volume"].sum()
-                            if g["Volume"].sum() != 0 else 0.0
-                        ),
-                    })
-                )
-                .reset_index(drop=True)
-            )
+            grouped = df.groupby("Symbol").apply(
+                lambda g: pd.Series({
+                    "shares": g["Volume"].sum(),
+                    "avg_buy": (
+                        (g["Volume"] * g["Open price"]).sum() / g["Volume"].sum()
+                        if g["Volume"].sum() != 0 else 0.0
+                    ),
+                }), include_groups=False
+            ).reset_index()
 
             imported = 0
             for _, row in grouped.iterrows():

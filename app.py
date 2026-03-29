@@ -385,12 +385,12 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    page = st.radio("", [
+    page = st.radio("Navigation", [
         "🗂  Portfolio",
         "➕  Add Asset",
         "📥  Import / Export",
         "📊  Analytics",
-    ], key="nav_page")
+    ], key="nav_page", label_visibility="collapsed")
 
     st.markdown("<div style='height:40px'></div>", unsafe_allow_html=True)
     st.divider()
