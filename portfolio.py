@@ -1,9 +1,12 @@
 import json
 import os
+import warnings
 import pandas as pd
 import matplotlib.pyplot as plt
 from tabulate import tabulate
 from stock import Stock
+
+warnings.filterwarnings("ignore", message="Workbook contains no default style", category=UserWarning, module="openpyxl")
 
 
 class Portfolio:
