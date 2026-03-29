@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import matplotlib.pyplot as plt
 from tabulate import tabulate
@@ -177,15 +178,10 @@ class Portfolio:
         if isin_to_ticker is None:
             isin_to_ticker = {}
 
-        _ticker_cache = {}
-
-        def resolve_ticker(isin, product_name=""):
-            if isin in _ticker_cache:
-                return _ticker_cache[isin]
+        def _resolve_isin(args: tuple) -> tuple[str, str | None]:
+            isin, product_name = args
             if isin in isin_to_ticker:
-                _ticker_cache[isin] = isin_to_ticker[isin]
-                return isin_to_ticker[isin]
-            # Try searching by ISIN first, then by product name
+                return isin, isin_to_ticker[isin]
             for query in [isin, product_name]:
                 if not query:
                     continue
@@ -196,13 +192,11 @@ class Portfolio:
                     if best and best.get("symbol"):
                         ticker = best["symbol"]
                         print(f"  🔍 Resolved ISIN '{isin}' → {ticker}")
-                        _ticker_cache[isin] = ticker
-                        return ticker
+                        return isin, ticker
                 except Exception:
                     continue
             print(f"  ⚠️ Could not resolve ISIN '{isin}'")
-            _ticker_cache[isin] = None
-            return None
+            return isin, None
 
         if not os.path.exists(csv_path):
             print(f"❌ File not found: {csv_path}")
@@ -239,17 +233,25 @@ class Portfolio:
             df["cash"] = to_float(df["Celkem EUR"])
             df = df.dropna(subset=["dt", "ISIN", "qty", "cash"]).sort_values("dt")
 
+            # Resolve all unique ISINs in parallel
+            unique_isins = df["ISIN"].unique().tolist()
+            isin_names = {
+                r["ISIN"]: (str(r[name_col]) if name_col else "")
+                for _, r in df.drop_duplicates("ISIN").iterrows()
+            }
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                ticker_map = dict(ex.map(_resolve_isin, [(i, isin_names.get(i, "")) for i in unique_isins]))
+
             if overwrite:
                 self.stocks = []
 
             positions = {}
             for _, r in df.iterrows():
                 isin = r["ISIN"]
-                product_name = str(r[name_col]) if name_col else ""
                 qty = r["qty"]
                 cash = r["cash"]
 
-                ticker = resolve_ticker(isin, product_name)
+                ticker = ticker_map.get(isin)
                 if not ticker:
                     continue
 
@@ -271,7 +273,7 @@ class Portfolio:
                     continue
                 avg_price = pos["cost"] / pos["shares"]
                 purchase_date = pos["dt"].date().isoformat() if pd.notna(pos["dt"]) else None
-                self.add_stock(pos["ticker"], pos["shares"], avg_price, purchase_date=purchase_date)
+                self.add_stock(ticker_map[isin], pos["shares"], avg_price, purchase_date=purchase_date)
                 imported += 1
 
             self.save_portfolio()
@@ -441,21 +443,30 @@ class Portfolio:
         if instrument_to_ticker is None:
             instrument_to_ticker = {}
 
-        def resolve_ticker(instrument_name: str) -> str | None:
+        def _search_ticker(instrument_name: str) -> tuple[str, str | None]:
             if instrument_name in instrument_to_ticker:
-                return instrument_to_ticker[instrument_name]
+                return instrument_name, instrument_to_ticker[instrument_name]
             try:
                 results = yf.Search(instrument_name, max_results=5).quotes
-                # Prefer ETF results, then any result with a symbol
                 etfs = [r for r in results if r.get("quoteType", "").upper() == "ETF"]
                 best = etfs[0] if etfs else (results[0] if results else None)
-                if best:
-                    ticker = best.get("symbol", "")
+                if best and best.get("symbol"):
+                    ticker = best["symbol"]
                     print(f"  🔍 Resolved '{instrument_name}' → {ticker}")
-                    return ticker
+                    return instrument_name, ticker
             except Exception as e:
                 print(f"  ⚠️ Could not resolve '{instrument_name}': {e}")
-            return None
+            return instrument_name, None
+
+        def resolve_tickers_parallel(names: list) -> dict:
+            # Already known — skip API calls
+            unknown = [n for n in names if n not in instrument_to_ticker]
+            result = {n: instrument_to_ticker[n] for n in names if n in instrument_to_ticker}
+            if unknown:
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    for name, ticker in ex.map(_search_ticker, unknown):
+                        result[name] = ticker
+            return result
 
         if not os.path.exists(xlsx_path):
             print(f"❌ File not found: {xlsx_path}")
@@ -509,11 +520,13 @@ class Portfolio:
             if overwrite:
                 self.stocks = []
 
-            # Group by instrument: sum shares, weighted avg price, earliest date
+            instruments = df["Instrument"].unique().tolist()
+            ticker_map = resolve_tickers_parallel(instruments)
+
             imported = 0
             skipped = []
             for instrument, group in df.groupby("Instrument"):
-                ticker = resolve_ticker(instrument)
+                ticker = ticker_map.get(instrument)
                 if not ticker:
                     skipped.append(instrument)
                     continue
