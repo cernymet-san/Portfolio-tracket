@@ -384,14 +384,34 @@ class Portfolio:
         except Exception as e:
             print(f"❌ Anycoin import failed: {e}")
 
-    def import_xtb_cash_operations_xlsx(self, xlsx_path, instrument_to_ticker, overwrite=False):
+    def import_xtb_cash_operations_xlsx(self, xlsx_path, instrument_to_ticker=None, overwrite=False):
         """
         Import XTB Cash Operations XLSX report.
         Expected columns: Type, Instrument, Time, Amount, ID, Comment
         Comment format: "OPEN BUY shares/total @ price" or "OPEN BUY shares @ price"
-        instrument_to_ticker: dict mapping instrument names to ticker symbols
+        instrument_to_ticker: optional dict of known mappings; unknown instruments are resolved via yf.Search()
         """
         import re
+        import yfinance as yf
+
+        if instrument_to_ticker is None:
+            instrument_to_ticker = {}
+
+        def resolve_ticker(instrument_name: str) -> str | None:
+            if instrument_name in instrument_to_ticker:
+                return instrument_to_ticker[instrument_name]
+            try:
+                results = yf.Search(instrument_name, max_results=5).quotes
+                # Prefer ETF results, then any result with a symbol
+                etfs = [r for r in results if r.get("quoteType", "").upper() == "ETF"]
+                best = etfs[0] if etfs else (results[0] if results else None)
+                if best:
+                    ticker = best.get("symbol", "")
+                    print(f"  🔍 Resolved '{instrument_name}' → {ticker}")
+                    return ticker
+            except Exception as e:
+                print(f"  ⚠️ Could not resolve '{instrument_name}': {e}")
+            return None
 
         if not os.path.exists(xlsx_path):
             print(f"❌ File not found: {xlsx_path}")
@@ -436,27 +456,29 @@ class Portfolio:
             df["_price"] = df["_price"].astype(float)
             df["Instrument"] = df["Instrument"].astype(str).str.strip()
 
-            # Only process instruments we have a mapping for
-            df = df[df["Instrument"].isin(instrument_to_ticker)]
-            if df.empty:
-                print("❌ No rows matched instrument_to_ticker mapping")
-                return
-
             df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
 
             if overwrite:
                 self.stocks = []
 
             # Group by instrument: sum shares, weighted avg price, earliest date
+            imported = 0
+            skipped = []
             for instrument, group in df.groupby("Instrument"):
-                ticker = instrument_to_ticker[instrument]
+                ticker = resolve_ticker(instrument)
+                if not ticker:
+                    skipped.append(instrument)
+                    continue
                 total_shares = group["_shares"].sum()
                 avg_price = (group["_shares"] * group["_price"]).sum() / total_shares
                 earliest_date = group["Time"].min().date().isoformat() if not group["Time"].isna().all() else None
                 self.add_stock(ticker, round(total_shares, 6), round(avg_price, 4), purchase_date=earliest_date)
+                imported += 1
 
             self.save_portfolio()
-            print(f"✅ Imported XTB Cash Operations: {df['Instrument'].nunique()} instruments")
+            print(f"✅ Imported XTB Cash Operations: {imported} instruments")
+            if skipped:
+                print(f"⚠️  Could not resolve tickers for: {skipped}")
 
         except Exception as e:
             print(f"❌ XTB Cash Operations import failed: {e}")
