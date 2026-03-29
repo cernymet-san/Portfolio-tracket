@@ -468,6 +468,17 @@ if page == "🗂  Portfolio":
         # Holdings table
         st.markdown(render_holdings_table(df, total_value), unsafe_allow_html=True)
 
+        # Per-row remove buttons
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        with st.expander("🗑️ Remove a holding"):
+            for s in list(p.stocks):
+                col_sym, col_btn = st.columns([4, 1])
+                col_sym.markdown(f"**{s.symbol}** — {float(s.shares):,.4f} shares")
+                if col_btn.button("Remove", key=f"rm_{s.symbol}"):
+                    p.remove_stock(s.symbol)
+                    fetch_last_close.clear()
+                    st.rerun()
+
         # History chart
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
         period_col, _ = st.columns([1, 5])
@@ -591,12 +602,13 @@ elif page == "📥  Import / Export":
         with st.expander("📥 Import XTB Positions (.xlsx)"):
             st.caption("Export from XTB: Portfolio → Open Positions → Download XLSX")
             xtb_file = st.file_uploader("Upload XTB Positions XLSX", type=["xlsx"], key="xtb_upload")
+            overwrite_xtb_pos = st.checkbox("Overwrite existing portfolio", value=False, key="xtb_pos_overwrite")
             if xtb_file and st.button("Import XTB Positions", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
                     tmp.write(xtb_file.getbuffer())
                     tmp_path = tmp.name
                 try:
-                    p.import_xtb_positions_xlsx(tmp_path)
+                    p.import_xtb_positions_xlsx(tmp_path, overwrite=overwrite_xtb_pos)
                     fetch_last_close.clear()
                     fetch_history_value.clear()
                     st.success("✅ Imported XTB Positions")
@@ -610,12 +622,13 @@ elif page == "📥  Import / Export":
         with st.expander("📥 Import DEGIRO Transactions (.csv)"):
             degiro_file = st.file_uploader("Upload DEGIRO CSV", type=["csv"], key="degiro_upload")
             st.caption("Unknown ISINs are resolved automatically via Yahoo Finance.")
+            overwrite_degiro = st.checkbox("Overwrite existing portfolio", value=False, key="degiro_overwrite")
             if degiro_file and st.button("Import DEGIRO CSV", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
                     tmp.write(degiro_file.getbuffer())
                     tmp_path = tmp.name
                 try:
-                    p.import_degiro_transactions_csv(tmp_path, ISIN_TO_TICKER, overwrite=False)
+                    p.import_degiro_transactions_csv(tmp_path, ISIN_TO_TICKER, overwrite=overwrite_degiro)
                     fetch_last_close.clear()
                     fetch_history_value.clear()
                     st.success("✅ Imported DEGIRO CSV")
@@ -629,12 +642,13 @@ elif page == "📥  Import / Export":
         with st.expander("📥 Import Anycoin Crypto (.csv)"):
             anycoin_file = st.file_uploader("Upload Anycoin CSV", type=["csv"], key="anycoin_upload")
             czk_rate = st.number_input("CZK per EUR", min_value=1.0, value=25.0, step=0.5, key="czk_rate")
+            overwrite_anycoin = st.checkbox("Overwrite existing portfolio", value=False, key="anycoin_overwrite")
             if anycoin_file and st.button("Import Anycoin CSV", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
                     tmp.write(anycoin_file.getbuffer())
                     tmp_path = tmp.name
                 try:
-                    p.import_anycoin_trade_fills_csv(tmp_path, overwrite=False, czk_per_eur=czk_rate)
+                    p.import_anycoin_trade_fills_csv(tmp_path, overwrite=overwrite_anycoin, czk_per_eur=czk_rate)
                     fetch_last_close.clear()
                     fetch_history_value.clear()
                     st.success("✅ Imported Anycoin CSV")
