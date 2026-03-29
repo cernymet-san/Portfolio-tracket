@@ -609,7 +609,7 @@ elif page == "📥  Import / Export":
 
         with st.expander("📥 Import DEGIRO Transactions (.csv)"):
             degiro_file = st.file_uploader("Upload DEGIRO CSV", type=["csv"], key="degiro_upload")
-            st.caption("Requires ISIN_TO_TICKER mapping in app.py.")
+            st.caption("Unknown ISINs are resolved automatically via Yahoo Finance.")
             if degiro_file and st.button("Import DEGIRO CSV", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
                     tmp.write(degiro_file.getbuffer())

@@ -166,11 +166,44 @@ class Portfolio:
     # Importers
     # ------------------------------------------------------------------
 
-    def import_degiro_transactions_csv(self, csv_path, isin_to_ticker, overwrite=False):
+    def import_degiro_transactions_csv(self, csv_path, isin_to_ticker=None, overwrite=False):
         """
         Import DEGIRO Transactions.csv and rebuild positions.
         Expected columns: Datum, Čas, ISIN, Počet, Celkem EUR
+        Unknown ISINs are resolved via yf.Search() automatically.
         """
+        import yfinance as yf
+
+        if isin_to_ticker is None:
+            isin_to_ticker = {}
+
+        _ticker_cache = {}
+
+        def resolve_ticker(isin, product_name=""):
+            if isin in _ticker_cache:
+                return _ticker_cache[isin]
+            if isin in isin_to_ticker:
+                _ticker_cache[isin] = isin_to_ticker[isin]
+                return isin_to_ticker[isin]
+            # Try searching by ISIN first, then by product name
+            for query in [isin, product_name]:
+                if not query:
+                    continue
+                try:
+                    results = yf.Search(query, max_results=5).quotes
+                    etfs = [r for r in results if r.get("quoteType", "").upper() == "ETF"]
+                    best = etfs[0] if etfs else (results[0] if results else None)
+                    if best and best.get("symbol"):
+                        ticker = best["symbol"]
+                        print(f"  🔍 Resolved ISIN '{isin}' → {ticker}")
+                        _ticker_cache[isin] = ticker
+                        return ticker
+                except Exception:
+                    continue
+            print(f"  ⚠️ Could not resolve ISIN '{isin}'")
+            _ticker_cache[isin] = None
+            return None
+
         if not os.path.exists(csv_path):
             print(f"❌ File not found: {csv_path}")
             return
@@ -183,6 +216,9 @@ class Portfolio:
             if missing:
                 print(f"❌ CSV missing columns: {missing}")
                 return
+
+            # Grab product name column if present (helps with search)
+            name_col = next((c for c in df.columns if "product" in c.lower() or "naam" in c.lower() or "název" in c.lower()), None)
 
             df["dt"] = pd.to_datetime(
                 df["Datum"].astype(str) + " " + df["Čas"].astype(str),
@@ -209,14 +245,16 @@ class Portfolio:
             positions = {}
             for _, r in df.iterrows():
                 isin = r["ISIN"]
+                product_name = str(r[name_col]) if name_col else ""
                 qty = r["qty"]
                 cash = r["cash"]
 
-                if isin not in isin_to_ticker:
+                ticker = resolve_ticker(isin, product_name)
+                if not ticker:
                     continue
 
                 if isin not in positions:
-                    positions[isin] = {"shares": 0.0, "cost": 0.0}
+                    positions[isin] = {"ticker": ticker, "shares": 0.0, "cost": 0.0, "dt": r["dt"]}
 
                 pos = positions[isin]
                 if qty > 0:  # BUY
@@ -227,15 +265,17 @@ class Portfolio:
                     pos["cost"] -= avg_cost * (-qty)
                     pos["shares"] += qty
 
+            imported = 0
             for isin, pos in positions.items():
                 if pos["shares"] <= 0:
                     continue
-                ticker = isin_to_ticker[isin]
                 avg_price = pos["cost"] / pos["shares"]
-                self.add_stock(ticker, pos["shares"], avg_price)
+                purchase_date = pos["dt"].date().isoformat() if pd.notna(pos["dt"]) else None
+                self.add_stock(pos["ticker"], pos["shares"], avg_price, purchase_date=purchase_date)
+                imported += 1
 
             self.save_portfolio()
-            print("✅ DEGIRO CSV imported successfully")
+            print(f"✅ DEGIRO CSV imported: {imported} positions")
 
         except Exception as e:
             print(f"❌ Import failed: {e}")
