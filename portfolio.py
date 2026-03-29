@@ -384,6 +384,83 @@ class Portfolio:
         except Exception as e:
             print(f"❌ Anycoin import failed: {e}")
 
+    def import_xtb_cash_operations_xlsx(self, xlsx_path, instrument_to_ticker, overwrite=False):
+        """
+        Import XTB Cash Operations XLSX report.
+        Expected columns: Type, Instrument, Time, Amount, ID, Comment
+        Comment format: "OPEN BUY shares/total @ price" or "OPEN BUY shares @ price"
+        instrument_to_ticker: dict mapping instrument names to ticker symbols
+        """
+        import re
+
+        if not os.path.exists(xlsx_path):
+            print(f"❌ File not found: {xlsx_path}")
+            return
+
+        try:
+            # Find the header row (contains "Type")
+            raw = pd.read_excel(xlsx_path, header=None)
+            header_row = None
+            for i, row in raw.iterrows():
+                if "Type" in row.values:
+                    header_row = i
+                    break
+            if header_row is None:
+                print("❌ Could not find header row with 'Type' column")
+                return
+
+            df = pd.read_excel(xlsx_path, header=header_row)
+            df.columns = df.columns.str.strip()
+
+            required = {"Type", "Instrument", "Time", "Comment"}
+            missing = required - set(df.columns)
+            if missing:
+                print(f"❌ Missing columns: {missing}")
+                return
+
+            df = df[df["Type"].astype(str).str.strip() == "Stock purchase"].copy()
+            if df.empty:
+                print("❌ No 'Stock purchase' rows found")
+                return
+
+            def parse_comment(comment):
+                """Extract (shares, price) from 'OPEN BUY x/y @ p' or 'OPEN BUY x @ p'"""
+                m = re.search(r"OPEN BUY\s+([\d.]+)(?:/[\d.]+)?\s*@\s*([\d.]+)", str(comment))
+                if m:
+                    return float(m.group(1)), float(m.group(2))
+                return None, None
+
+            df["_shares"], df["_price"] = zip(*df["Comment"].map(parse_comment))
+            df = df.dropna(subset=["_shares", "_price"])
+            df["_shares"] = df["_shares"].astype(float)
+            df["_price"] = df["_price"].astype(float)
+            df["Instrument"] = df["Instrument"].astype(str).str.strip()
+
+            # Only process instruments we have a mapping for
+            df = df[df["Instrument"].isin(instrument_to_ticker)]
+            if df.empty:
+                print("❌ No rows matched instrument_to_ticker mapping")
+                return
+
+            df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+
+            if overwrite:
+                self.stocks = []
+
+            # Group by instrument: sum shares, weighted avg price, earliest date
+            for instrument, group in df.groupby("Instrument"):
+                ticker = instrument_to_ticker[instrument]
+                total_shares = group["_shares"].sum()
+                avg_price = (group["_shares"] * group["_price"]).sum() / total_shares
+                earliest_date = group["Time"].min().date().isoformat() if not group["Time"].isna().all() else None
+                self.add_stock(ticker, round(total_shares, 6), round(avg_price, 4), purchase_date=earliest_date)
+
+            self.save_portfolio()
+            print(f"✅ Imported XTB Cash Operations: {df['Instrument'].nunique()} instruments")
+
+        except Exception as e:
+            print(f"❌ XTB Cash Operations import failed: {e}")
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------

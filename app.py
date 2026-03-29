@@ -47,6 +47,14 @@ ISIN_TO_TICKER = {
     "IE00BG0SKF03": "5MVL.DE",
 }
 
+# XTB Cash Operations: Instrument name → ticker symbol
+XTB_INSTRUMENT_TO_TICKER = {
+    "FTSE All-World": "VWCE.DE",
+    "MSCI USA Small Cap V-Weighted": "ZPRV.DE",
+    "Core MSCI EM IMI": "EMIM.AS",
+    "Edge MSCI EM ValueFactor": "5MVL.DE",
+}
+
 AVATAR_COLORS = [
     "#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444",
     "#06b6d4", "#ec4899", "#14b8a6", "#f97316", "#6366f1",
@@ -558,9 +566,32 @@ elif page == "📥  Import / Export":
                 except Exception as e:
                     st.error(f"❌ {e}")
 
+        with st.expander("📥 Import XTB Cash Operations (.xlsx)"):
+            st.caption("Export from XTB: History → Cash Operations → Download XLSX")
+            xtb_cash_file = st.file_uploader("Upload XTB Cash Operations XLSX", type=["xlsx"], key="xtb_cash_upload")
+            overwrite_xtb = st.checkbox("Overwrite existing portfolio", value=False, key="xtb_cash_overwrite")
+            if xtb_cash_file and st.button("Import XTB Cash Operations", width="stretch"):
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                    tmp.write(xtb_cash_file.getbuffer())
+                    tmp_path = tmp.name
+                try:
+                    p.import_xtb_cash_operations_xlsx(tmp_path, XTB_INSTRUMENT_TO_TICKER, overwrite=overwrite_xtb)
+                    fetch_last_close.clear()
+                    fetch_history_value.clear()
+                    st.success("✅ Imported XTB Cash Operations")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ {e}")
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+
         with st.expander("📥 Import XTB Positions (.xlsx)"):
-            xtb_file = st.file_uploader("Upload XTB XLSX", type=["xlsx"], key="xtb_upload")
-            if xtb_file and st.button("Import XTB XLSX", width="stretch"):
+            st.caption("Export from XTB: Portfolio → Open Positions → Download XLSX")
+            xtb_file = st.file_uploader("Upload XTB Positions XLSX", type=["xlsx"], key="xtb_upload")
+            if xtb_file and st.button("Import XTB Positions", width="stretch"):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
                     tmp.write(xtb_file.getbuffer())
                     tmp_path = tmp.name
@@ -568,7 +599,7 @@ elif page == "📥  Import / Export":
                     p.import_xtb_positions_xlsx(tmp_path)
                     fetch_last_close.clear()
                     fetch_history_value.clear()
-                    st.success("✅ Imported XTB XLSX")
+                    st.success("✅ Imported XTB Positions")
                     st.rerun()
                 finally:
                     try:
