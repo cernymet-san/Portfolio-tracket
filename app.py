@@ -554,6 +554,24 @@ elif page == "📥  Import / Export":
     st.markdown("## Import / Export")
     col1, col2 = st.columns(2, gap="large")
 
+    def run_import(label: str, steps: list[tuple[str, callable]]):
+        """Run import steps with a progress bar and status messages."""
+        status = st.status(f"⏳ {label}...", expanded=True)
+        bar = st.progress(0)
+        try:
+            n = len(steps)
+            for i, (msg, fn) in enumerate(steps):
+                status.write(f"🔄 {msg}")
+                bar.progress((i) / n)
+                fn()
+            bar.progress(1.0)
+            status.update(label=f"✅ {label} complete", state="complete", expanded=False)
+        except Exception as e:
+            status.update(label=f"❌ {label} failed", state="error", expanded=True)
+            status.write(f"Error: {e}")
+            bar.empty()
+            raise
+
     with col1:
         with st.expander("📥 Import Portfolio (.json)", expanded=True):
             json_file = st.file_uploader("Upload portfolio.json", type=["json"], key="json_upload")
@@ -565,14 +583,18 @@ elif page == "📥  Import / Export":
                     if not stocks:
                         st.error("❌ No stocks found in JSON file.")
                     else:
-                        if overwrite_json:
-                            p.stocks = []
-                        for s in stocks:
-                            p.add_stock(s["symbol"], float(s["shares"]), float(s["purchase_price"]))
-                        p.save_portfolio()
-                        fetch_last_close.clear()
-                        fetch_history_value.clear()
-                        st.success(f"✅ Imported {len(stocks)} stocks")
+                        def _do_json():
+                            if overwrite_json:
+                                p.stocks = []
+                            for s in stocks:
+                                p.add_stock(s["symbol"], float(s["shares"]), float(s["purchase_price"]))
+                            p.save_portfolio()
+                            fetch_last_close.clear()
+                            fetch_history_value.clear()
+                        run_import("Importing JSON", [
+                            ("Reading stocks", lambda: None),
+                            (f"Adding {len(stocks)} positions", _do_json),
+                        ])
                         st.rerun()
                 except Exception as e:
                     st.error(f"❌ {e}")
@@ -586,13 +608,15 @@ elif page == "📥  Import / Export":
                     tmp.write(xtb_cash_file.getbuffer())
                     tmp_path = tmp.name
                 try:
-                    p.import_xtb_cash_operations_xlsx(tmp_path, XTB_INSTRUMENT_TO_TICKER, overwrite=overwrite_xtb)
-                    fetch_last_close.clear()
-                    fetch_history_value.clear()
-                    st.success("✅ Imported XTB Cash Operations")
+                    run_import("Importing XTB Cash Operations", [
+                        ("Reading XLSX file", lambda: None),
+                        ("Parsing transactions", lambda: None),
+                        ("Resolving ticker symbols via Yahoo Finance", lambda: p.import_xtb_cash_operations_xlsx(tmp_path, XTB_INSTRUMENT_TO_TICKER, overwrite=overwrite_xtb)),
+                        ("Clearing cache", lambda: (fetch_last_close.clear(), fetch_history_value.clear())),
+                    ])
                     st.rerun()
-                except Exception as e:
-                    st.error(f"❌ {e}")
+                except Exception:
+                    pass
                 finally:
                     try:
                         os.remove(tmp_path)
@@ -608,11 +632,14 @@ elif page == "📥  Import / Export":
                     tmp.write(xtb_file.getbuffer())
                     tmp_path = tmp.name
                 try:
-                    p.import_xtb_positions_xlsx(tmp_path, overwrite=overwrite_xtb_pos)
-                    fetch_last_close.clear()
-                    fetch_history_value.clear()
-                    st.success("✅ Imported XTB Positions")
+                    run_import("Importing XTB Positions", [
+                        ("Reading XLSX file", lambda: None),
+                        ("Calculating average prices", lambda: p.import_xtb_positions_xlsx(tmp_path, overwrite=overwrite_xtb_pos)),
+                        ("Clearing cache", lambda: (fetch_last_close.clear(), fetch_history_value.clear())),
+                    ])
                     st.rerun()
+                except Exception:
+                    pass
                 finally:
                     try:
                         os.remove(tmp_path)
@@ -628,11 +655,14 @@ elif page == "📥  Import / Export":
                     tmp.write(degiro_file.getbuffer())
                     tmp_path = tmp.name
                 try:
-                    p.import_degiro_transactions_csv(tmp_path, ISIN_TO_TICKER, overwrite=overwrite_degiro)
-                    fetch_last_close.clear()
-                    fetch_history_value.clear()
-                    st.success("✅ Imported DEGIRO CSV")
+                    run_import("Importing DEGIRO CSV", [
+                        ("Reading CSV file", lambda: None),
+                        ("Resolving ISINs via Yahoo Finance", lambda: p.import_degiro_transactions_csv(tmp_path, ISIN_TO_TICKER, overwrite=overwrite_degiro)),
+                        ("Clearing cache", lambda: (fetch_last_close.clear(), fetch_history_value.clear())),
+                    ])
                     st.rerun()
+                except Exception:
+                    pass
                 finally:
                     try:
                         os.remove(tmp_path)
@@ -648,11 +678,14 @@ elif page == "📥  Import / Export":
                     tmp.write(anycoin_file.getbuffer())
                     tmp_path = tmp.name
                 try:
-                    p.import_anycoin_trade_fills_csv(tmp_path, overwrite=overwrite_anycoin, czk_per_eur=czk_rate)
-                    fetch_last_close.clear()
-                    fetch_history_value.clear()
-                    st.success("✅ Imported Anycoin CSV")
+                    run_import("Importing Anycoin CSV", [
+                        ("Reading CSV file", lambda: None),
+                        ("Processing trade fills", lambda: p.import_anycoin_trade_fills_csv(tmp_path, overwrite=overwrite_anycoin, czk_per_eur=czk_rate)),
+                        ("Clearing cache", lambda: (fetch_last_close.clear(), fetch_history_value.clear())),
+                    ])
                     st.rerun()
+                except Exception:
+                    pass
                 finally:
                     try:
                         os.remove(tmp_path)
