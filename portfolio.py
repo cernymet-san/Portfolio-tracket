@@ -392,6 +392,7 @@ class Portfolio:
         instrument_to_ticker: optional dict of known mappings; unknown instruments are resolved via yf.Search()
         """
         import re
+        import warnings
         import yfinance as yf
 
         if instrument_to_ticker is None:
@@ -419,7 +420,9 @@ class Portfolio:
 
         try:
             # Find the header row (contains "Type")
-            raw = pd.read_excel(xlsx_path, header=None)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                raw = pd.read_excel(xlsx_path, header=None)
             header_row = None
             for i, row in raw.iterrows():
                 if "Type" in row.values:
@@ -429,7 +432,9 @@ class Portfolio:
                 print("❌ Could not find header row with 'Type' column")
                 return
 
-            df = pd.read_excel(xlsx_path, header=header_row)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_excel(xlsx_path, header=header_row)
             df.columns = df.columns.str.strip()
 
             required = {"Type", "Instrument", "Time", "Comment"}
