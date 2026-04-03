@@ -1,13 +1,9 @@
 import json
 import os
-import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import matplotlib.pyplot as plt
 from tabulate import tabulate
 from stock import Stock
-
-warnings.filterwarnings("ignore", message="Workbook contains no default style", category=UserWarning, module="openpyxl")
 
 
 class Portfolio:
@@ -22,17 +18,15 @@ class Portfolio:
     # Core CRUD
     # ------------------------------------------------------------------
 
-    def add_stock(self, symbol, shares, purchase_price, purchase_date=None):
+    def add_stock(self, symbol, shares, purchase_price):
         symbol = symbol.upper().strip()
         for existing in self.stocks:
             if existing.symbol == symbol:
                 print(f"⚠️  {symbol} already exists. Adding shares.")
                 existing.shares += shares
-                if purchase_date and not existing.purchase_date:
-                    existing.purchase_date = purchase_date
                 self.save_portfolio()
                 return
-        self.stocks.append(Stock(symbol, shares, purchase_price, purchase_date))
+        self.stocks.append(Stock(symbol, shares, purchase_price))
         self.save_portfolio()
         print(f"✅ Added {shares} shares of {symbol} at €{purchase_price}")
 
@@ -167,37 +161,11 @@ class Portfolio:
     # Importers
     # ------------------------------------------------------------------
 
-    def import_degiro_transactions_csv(self, csv_path, isin_to_ticker=None, overwrite=False):
+    def import_degiro_transactions_csv(self, csv_path, isin_to_ticker, overwrite=False):
         """
         Import DEGIRO Transactions.csv and rebuild positions.
         Expected columns: Datum, Čas, ISIN, Počet, Celkem EUR
-        Unknown ISINs are resolved via yf.Search() automatically.
         """
-        import yfinance as yf
-
-        if isin_to_ticker is None:
-            isin_to_ticker = {}
-
-        def _resolve_isin(args: tuple) -> tuple[str, str | None]:
-            isin, product_name = args
-            if isin in isin_to_ticker:
-                return isin, isin_to_ticker[isin]
-            for query in [isin, product_name]:
-                if not query:
-                    continue
-                try:
-                    results = yf.Search(query, max_results=5).quotes
-                    etfs = [r for r in results if r.get("quoteType", "").upper() == "ETF"]
-                    best = etfs[0] if etfs else (results[0] if results else None)
-                    if best and best.get("symbol"):
-                        ticker = best["symbol"]
-                        print(f"  🔍 Resolved ISIN '{isin}' → {ticker}")
-                        return isin, ticker
-                except Exception:
-                    continue
-            print(f"  ⚠️ Could not resolve ISIN '{isin}'")
-            return isin, None
-
         if not os.path.exists(csv_path):
             print(f"❌ File not found: {csv_path}")
             return
@@ -210,9 +178,6 @@ class Portfolio:
             if missing:
                 print(f"❌ CSV missing columns: {missing}")
                 return
-
-            # Grab product name column if present (helps with search)
-            name_col = next((c for c in df.columns if "product" in c.lower() or "naam" in c.lower() or "název" in c.lower()), None)
 
             df["dt"] = pd.to_datetime(
                 df["Datum"].astype(str) + " " + df["Čas"].astype(str),
@@ -233,15 +198,6 @@ class Portfolio:
             df["cash"] = to_float(df["Celkem EUR"])
             df = df.dropna(subset=["dt", "ISIN", "qty", "cash"]).sort_values("dt")
 
-            # Resolve all unique ISINs in parallel
-            unique_isins = df["ISIN"].unique().tolist()
-            isin_names = {
-                r["ISIN"]: (str(r[name_col]) if name_col else "")
-                for _, r in df.drop_duplicates("ISIN").iterrows()
-            }
-            with ThreadPoolExecutor(max_workers=8) as ex:
-                ticker_map = dict(ex.map(_resolve_isin, [(i, isin_names.get(i, "")) for i in unique_isins]))
-
             if overwrite:
                 self.stocks = []
 
@@ -251,12 +207,11 @@ class Portfolio:
                 qty = r["qty"]
                 cash = r["cash"]
 
-                ticker = ticker_map.get(isin)
-                if not ticker:
+                if isin not in isin_to_ticker:
                     continue
 
                 if isin not in positions:
-                    positions[isin] = {"ticker": ticker, "shares": 0.0, "cost": 0.0, "dt": r["dt"]}
+                    positions[isin] = {"shares": 0.0, "cost": 0.0}
 
                 pos = positions[isin]
                 if qty > 0:  # BUY
@@ -267,17 +222,15 @@ class Portfolio:
                     pos["cost"] -= avg_cost * (-qty)
                     pos["shares"] += qty
 
-            imported = 0
             for isin, pos in positions.items():
                 if pos["shares"] <= 0:
                     continue
+                ticker = isin_to_ticker[isin]
                 avg_price = pos["cost"] / pos["shares"]
-                purchase_date = pos["dt"].date().isoformat() if pd.notna(pos["dt"]) else None
-                self.add_stock(ticker_map[isin], pos["shares"], avg_price, purchase_date=purchase_date)
-                imported += 1
+                self.add_stock(ticker, pos["shares"], avg_price)
 
             self.save_portfolio()
-            print(f"✅ DEGIRO CSV imported: {imported} positions")
+            print("✅ DEGIRO CSV imported successfully")
 
         except Exception as e:
             print(f"❌ Import failed: {e}")
@@ -295,41 +248,18 @@ class Portfolio:
         try:
             df = pd.read_excel(xlsx_path, sheet_name=sheet_name)
 
-            # Normalize column names: strip whitespace, lowercase for matching
-            df.columns = df.columns.str.strip()
-            col_map = {c.lower(): c for c in df.columns}
-            print(f"  ℹ️ XTB Positions columns: {list(df.columns)}")
-
-            # Flexible column name matching
-            def find_col(*candidates):
-                for c in candidates:
-                    if c in col_map:
-                        return col_map[c]
-                return None
-
-            sym_col   = find_col("symbol")
-            type_col  = find_col("type", "direction")
-            vol_col   = find_col("volume", "quantity", "shares")
-            price_col = find_col("open price", "openprice", "open_price", "price")
-
-            missing = [n for n, c in [("Symbol", sym_col), ("Type", type_col), ("Volume", vol_col), ("Open price", price_col)] if c is None]
+            required = {"Symbol", "Type", "Volume", "Open price"}
+            missing = required - set(df.columns)
             if missing:
-                print(f"❌ Could not find columns: {missing}")
-                print(f"   Available: {list(df.columns)}")
+                print(f"❌ XLSX missing columns: {missing}")
+                print(f"Found columns: {list(df.columns)}")
                 return
-
-            # Rename to standard names
-            df = df.rename(columns={sym_col: "Symbol", type_col: "Type", vol_col: "Volume", price_col: "Open price"})
 
             df["Symbol"] = df["Symbol"].astype(str).str.strip()
             df = df[df["Symbol"].str.lower() != "total"]
-            df = df[df["Symbol"].str.strip() != ""]
+            df = df[df["Symbol"] != ""]
             df["Type"] = df["Type"].astype(str).str.upper().str.strip()
-
-            print(f"  ℹ️ Unique Type values: {df['Type'].unique().tolist()}")
-
-            # Accept BUY, LONG, or any positive direction
-            df = df[df["Type"].isin(["BUY", "LONG", "B", "PURCHASE"])]
+            df = df[df["Type"] == "BUY"]
 
             def to_float(series):
                 return pd.to_numeric(
@@ -343,24 +273,22 @@ class Portfolio:
             df["Volume"] = to_float(df["Volume"])
             df["Open price"] = to_float(df["Open price"])
             df = df.dropna(subset=["Volume", "Open price"])
-            print(f"  ℹ️ Rows after filtering: {len(df)}")
-
-            if len(df) == 0:
-                print("❌ No valid rows found after filtering. Check Type values and column names above.")
-                return
 
             if overwrite:
                 self.stocks = []
 
-            grouped = df.groupby("Symbol").apply(
-                lambda g: pd.Series({
-                    "shares": g["Volume"].sum(),
-                    "avg_buy": (
-                        (g["Volume"] * g["Open price"]).sum() / g["Volume"].sum()
-                        if g["Volume"].sum() != 0 else 0.0
-                    ),
-                }), include_groups=False
-            ).reset_index()
+            def _agg_group(g):
+                vol = g["Volume"].sum()
+                return pd.Series({
+                    "shares": vol,
+                    "avg_buy": (g["Volume"] * g["Open price"]).sum() / vol if vol != 0 else 0.0,
+                })
+
+            grouped = (
+                df.groupby("Symbol")[["Volume", "Open price"]]
+                .apply(_agg_group)
+                .reset_index()
+            )
 
             imported = 0
             for _, row in grouped.iterrows():
@@ -457,120 +385,149 @@ class Portfolio:
         except Exception as e:
             print(f"❌ Anycoin import failed: {e}")
 
-    def import_xtb_cash_operations_xlsx(self, xlsx_path, instrument_to_ticker=None, overwrite=False):
+    def import_xtb_statement_xlsx(self, xlsx_path, instrument_to_ticker=None, overwrite=False):
         """
-        Import XTB Cash Operations XLSX report.
-        Expected columns: Type, Instrument, Time, Amount, ID, Comment
-        Comment format: "OPEN BUY shares/total @ price" or "OPEN BUY shares @ price"
-        instrument_to_ticker: optional dict of known mappings; unknown instruments are resolved via yf.Search()
+        Import XTB Account Statement XLSX (Cash Operations sheet).
+        The file has 4 metadata rows before the real header row:
+          Type | Instrument | Time | Amount | ID | Comment | Product
+        Shares and price are parsed from Comment: "OPEN BUY {qty}[/{plan_qty}] @ {price}"
+        instrument_to_ticker: dict mapping XTB instrument names to ticker symbols.
         """
         import re
-        import warnings
-        import yfinance as yf
-
-        if instrument_to_ticker is None:
-            instrument_to_ticker = {}
-
-        def _search_ticker(instrument_name: str) -> tuple[str, str | None]:
-            if instrument_name in instrument_to_ticker:
-                return instrument_name, instrument_to_ticker[instrument_name]
-            try:
-                results = yf.Search(instrument_name, max_results=5).quotes
-                etfs = [r for r in results if r.get("quoteType", "").upper() == "ETF"]
-                best = etfs[0] if etfs else (results[0] if results else None)
-                if best and best.get("symbol"):
-                    ticker = best["symbol"]
-                    print(f"  🔍 Resolved '{instrument_name}' → {ticker}")
-                    return instrument_name, ticker
-            except Exception as e:
-                print(f"  ⚠️ Could not resolve '{instrument_name}': {e}")
-            return instrument_name, None
-
-        def resolve_tickers_parallel(names: list) -> dict:
-            # Already known — skip API calls
-            unknown = [n for n in names if n not in instrument_to_ticker]
-            result = {n: instrument_to_ticker[n] for n in names if n in instrument_to_ticker}
-            if unknown:
-                with ThreadPoolExecutor(max_workers=8) as ex:
-                    for name, ticker in ex.map(_search_ticker, unknown):
-                        result[name] = ticker
-            return result
 
         if not os.path.exists(xlsx_path):
             print(f"❌ File not found: {xlsx_path}")
             return
 
+        if instrument_to_ticker is None:
+            instrument_to_ticker = {}
+
         try:
-            # Find the header row (contains "Type")
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                raw = pd.read_excel(xlsx_path, header=None)
-            header_row = None
-            for i, row in raw.iterrows():
-                if "Type" in row.values:
-                    header_row = i
-                    break
-            if header_row is None:
-                print("❌ Could not find header row with 'Type' column")
-                return
+            df = pd.read_excel(xlsx_path, sheet_name="Cash Operations", header=4)
+            df.columns = [str(c).strip() for c in df.columns]
 
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                df = pd.read_excel(xlsx_path, header=header_row)
-            df.columns = df.columns.str.strip()
-
-            required = {"Type", "Instrument", "Time", "Comment"}
+            required = {"Type", "Instrument", "Comment"}
             missing = required - set(df.columns)
             if missing:
-                print(f"❌ Missing columns: {missing}")
+                print(f"❌ Cash Operations sheet missing columns: {missing}")
+                print(f"   Found: {list(df.columns)}")
                 return
 
-            df = df[df["Type"].astype(str).str.strip() == "Stock purchase"].copy()
-            if df.empty:
-                print("❌ No 'Stock purchase' rows found")
+            buys = df[df["Type"].astype(str).str.strip() == "Stock purchase"].copy()
+            if buys.empty:
+                print("❌ No 'Stock purchase' rows found in Cash Operations sheet.")
                 return
 
-            def parse_comment(comment):
-                """Extract (shares, price) from 'OPEN BUY x/y @ p' or 'OPEN BUY x @ p'"""
-                m = re.search(r"OPEN BUY\s+([\d.]+)(?:/[\d.]+)?\s*@\s*([\d.]+)", str(comment))
-                if m:
-                    return float(m.group(1)), float(m.group(2))
-                return None, None
+            # Parse qty and price from Comment: "OPEN BUY {qty}[/{plan_qty}] @ {price}"
+            pattern = re.compile(r"OPEN BUY\s+([\d.]+)(?:/[\d.]+)?\s+@\s+([\d.]+)", re.IGNORECASE)
 
-            df["_shares"], df["_price"] = zip(*df["Comment"].map(parse_comment))
-            df = df.dropna(subset=["_shares", "_price"])
-            df["_shares"] = df["_shares"].astype(float)
-            df["_price"] = df["_price"].astype(float)
-            df["Instrument"] = df["Instrument"].astype(str).str.strip()
-
-            df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+            positions = {}
+            skipped = 0
+            for _, row in buys.iterrows():
+                instrument = str(row["Instrument"]).strip()
+                comment = str(row.get("Comment", ""))
+                m = pattern.search(comment)
+                if not m:
+                    skipped += 1
+                    continue
+                qty = float(m.group(1))
+                price = float(m.group(2))
+                if qty <= 0:
+                    skipped += 1
+                    continue
+                if instrument not in positions:
+                    positions[instrument] = {"qty": 0.0, "cost": 0.0}
+                positions[instrument]["qty"] += qty
+                positions[instrument]["cost"] += qty * price
 
             if overwrite:
                 self.stocks = []
 
-            instruments = df["Instrument"].unique().tolist()
-            ticker_map = resolve_tickers_parallel(instruments)
-
             imported = 0
-            skipped = []
-            for instrument, group in df.groupby("Instrument"):
-                ticker = ticker_map.get(instrument)
+            unmapped = []
+            for instrument, pos in positions.items():
+                ticker = instrument_to_ticker.get(instrument)
                 if not ticker:
-                    skipped.append(instrument)
+                    unmapped.append(instrument)
                     continue
-                total_shares = group["_shares"].sum()
-                avg_price = (group["_shares"] * group["_price"]).sum() / total_shares
-                earliest_date = group["Time"].min().date().isoformat() if not group["Time"].isna().all() else None
-                self.add_stock(ticker, round(total_shares, 6), round(avg_price, 4), purchase_date=earliest_date)
+                avg_price = pos["cost"] / pos["qty"]
+                self.add_stock(ticker, round(pos["qty"], 6), round(avg_price, 6))
                 imported += 1
 
             self.save_portfolio()
-            print(f"✅ Imported XTB Cash Operations: {imported} instruments")
+            print(f"✅ Imported {imported} positions from XTB account statement")
             if skipped:
-                print(f"⚠️  Could not resolve tickers for: {skipped}")
+                print(f"ℹ️  Skipped {skipped} rows (unrecognised Comment format).")
+            if unmapped:
+                print(f"⚠️  No ticker mapping for: {unmapped}")
 
         except Exception as e:
-            print(f"❌ XTB Cash Operations import failed: {e}")
+            print(f"❌ XTB statement import failed: {e}")
+
+    def import_portfolio_xlsx(self, xlsx_path, overwrite=False):
+        """
+        Import a portfolio from a simple Excel file.
+        Expected columns (case-insensitive): symbol, shares, purchase_price
+        Optionally: purchase price / buy price / price  are accepted as aliases.
+        """
+        if not os.path.exists(xlsx_path):
+            print(f"❌ File not found: {xlsx_path}")
+            return
+
+        try:
+            df = pd.read_excel(xlsx_path)
+            df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+            # Normalise column name aliases
+            aliases = {
+                "purchase_price": ["purchase_price", "buy_price", "price", "avg_price",
+                                   "avg_buy", "cost", "open_price"],
+                "shares":         ["shares", "volume", "qty", "quantity", "amount"],
+                "symbol":         ["symbol", "ticker", "isin", "name"],
+            }
+            rename = {}
+            for canonical, options in aliases.items():
+                if canonical not in df.columns:
+                    for opt in options:
+                        if opt in df.columns:
+                            rename[opt] = canonical
+                            break
+            if rename:
+                df = df.rename(columns=rename)
+
+            missing = {"symbol", "shares", "purchase_price"} - set(df.columns)
+            if missing:
+                print(f"❌ XLSX missing required columns: {missing}")
+                print(f"   Found: {list(df.columns)}")
+                return
+
+            def to_float(series):
+                return pd.to_numeric(
+                    series.astype(str)
+                    .str.replace("\u00a0", "")
+                    .str.replace(" ", "")
+                    .str.replace(",", ".", regex=False),
+                    errors="coerce",
+                )
+
+            df["shares"] = to_float(df["shares"])
+            df["purchase_price"] = to_float(df["purchase_price"])
+            df = df.dropna(subset=["symbol", "shares", "purchase_price"])
+            df = df[df["shares"] > 0]
+
+            if overwrite:
+                self.stocks = []
+
+            imported = 0
+            for _, row in df.iterrows():
+                self.add_stock(str(row["symbol"]).strip(), float(row["shares"]), float(row["purchase_price"]))
+                imported += 1
+
+            self.save_portfolio()
+            print(f"✅ Imported {imported} holdings from portfolio XLSX")
+
+        except Exception as e:
+            print(f"❌ Portfolio XLSX import failed: {e}")
 
     # ------------------------------------------------------------------
     # Persistence
